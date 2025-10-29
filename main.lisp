@@ -8,8 +8,24 @@
 
 (defparameter *stack* nil)
 
+(defun no-op ())
+
+(defstruct forth-variable value)
+
+(defstruct forth-word
+  (function #'no-op :type function)
+  (immediate nil    :type boolean)
+  (description ""   :type string))
+
 (defmacro put-word (word fun ht)
-  `(setf (gethash ,word ,ht) (lambda () ,fun)))
+  `(setf (gethash ,word ,ht)
+         (make-forth-word :function (lambda () ,fun))))
+
+(defmacro put-word! (word fun desc immediate ht)
+  `(setf (gethash ,word ,ht)
+         (make-forth-word :function (lambda () ,fun)
+                          :description ,desc
+                          :immediate ,immediate)))
 
 (defmacro put-numop2 (sym fun ht)
   `(put-word ,sym (num-op-2 ,fun) ,ht))
@@ -45,8 +61,6 @@
         (push-stack a)
         (push-stack b))))
 
-(defstruct forth-variable value)
-
 (defparameter *variables* (make-hash-table :test 'equal))
 
 (defun var-store ()
@@ -66,12 +80,18 @@
     (put-numop2 "-" #'- ht)
     (put-numop2 "/" #'/ ht)
     (put-word "." (format t "~A~%" *stack*) ht)
-    (put-word "DROP" (pop-stack) ht)
-    (put-word "DUP" (dup) ht)
-    (put-word "SWAP" (swap) ht)
+    (put-word! "DROP" (pop-stack) "Drops 1 stack element." nil ht)
+    (put-word! "DUP" (dup) "Duplicates a stack element." nil ht)
+    (put-word! "SWAP" (swap) "Swaps top 2 stack elements." nil ht)
     (put-word "!" (var-store) ht)
     (put-word "@" (var-fetch) ht)
-    ht))
+    ht)
+    "Forth dictionary.
+   Keys are of string type. Values are of forth-word type.
+   The interpreter looks up a word in the dictionary and executes
+   its function in :execute mode.
+   In :compile mode, it just stores the function's address in the
+   word being compiled.")
 
 (defun var-define (name)
   (let ((var (make-forth-variable)))
@@ -79,13 +99,14 @@
     (put-word name (push-stack var) *words*)))
 
 (defun tick (name)
-  (let ((fun (gethash name *words*)))
-    (if fun
-        (push-stack fun)
+  (let ((word (gethash name *words*)))
+    (if word
+        (push-stack word)
         (error 'name-not-defined (format nil "undefined name: ~A~%" name)))))
 
-(defun exec-fun ()
-  (apply (pop-stack) nil))
+(defun exec-fun (&optional word)
+  "Execute the given word if not nil, otherwise the one on the stack."
+  (apply (forth-word-function (or word (pop-stack))) nil))
 
 ;; execute modes are:
 ;;    - exec: execute word
@@ -118,9 +139,9 @@
        (exec-fun))
       ((equal word "'")
        (setf *execute-mode* :tick))
-      (t (let ((op (gethash word *words*)))
-              (if op
-                  (apply op nil)
+      (t (let ((fw (gethash word *words*)))
+              (if fw
+                  (exec-fun fw)
                   (process-number word)))))))
 
 (defun process-from-lisp (&rest items)
@@ -130,4 +151,4 @@
           ((symbolp item) (process (list (symbol-name item))))
           ((numberp item) (process-number item))
           ((stringp item) (process (list item)))
-          (t (error :invalid-value (format nil "forth cannot handle value: ~A" item))))))
+          (t (error :invalid-value (format nil "forth cannot handle value: ~A~%" item))))))
