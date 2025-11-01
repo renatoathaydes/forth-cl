@@ -141,17 +141,20 @@
 (defun process (words)
   "Forth interpreter."
   (flet ((do-immediate (fw w)
-           (push-stack (or fw (coerce-to-number w))))
+           (if fw (exec-word fw)
+               (push-stack (coerce-to-number w))))
          (do-compile (fw w)
            (push-memory (or fw (coerce-to-number w)))))
     (dolist (word words)
       (cond
+        ;; first, we need to check the state for intermediate work by the tokenizer
         ((eq *interpreter-state* :name-compile)
          (push-memory (string word))
          (setf *interpreter-state* :exec))
         ((eq *interpreter-state* :name-quote)
          (push-stack (gethash (string word) *forth-dictionary*))
          (setf *interpreter-state* :exec))
+        ;; now, check for "code" words
         ((equal word "EXECUTE")
          (exec-word))
         ((equal word ":")
@@ -162,6 +165,7 @@
          (finish-compile))
         ((equal word "'")
          (setf *interpreter-state* :name-quote))
+        ;; finally, try to get words from the dictionary
         (t (let ((fw (gethash word *forth-dictionary*)))
              (if (eq *forth-mode* :immediate)
                  (do-immediate fw word)
