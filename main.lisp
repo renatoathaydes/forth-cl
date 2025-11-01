@@ -52,9 +52,8 @@
 
 (defun pop-stack ()
   "Remove the top of the stack"
-  (let ((result (peek-stack)))
-    (when result (setf *stack* (cdr *stack*)))
-    result))
+  (if *stack* (pop *stack*)
+      (error 'stack-underflow)))
 
 (defun push-stack (item)
   "Push item on top of the stack"
