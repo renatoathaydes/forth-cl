@@ -1,11 +1,13 @@
-(defpackage :forth-cl
-  (:use :cl))
-
 (in-package :forth-cl)
 
 (defmacro forth (&rest input)
-  "The main Forth macro for writing Forth in Lisp"
-  `(process-from-lisp '(,@input)))
+  "The main Forth macro for writing Forth in Lisp.
+   Pass a single string as argument, or Lisp symbols which will be
+   converted to a string before being given to the interpreter."
+  (if (and (= (length input) 1) (stringp (first input)))
+      (let ((s (first input)))
+        `(interpret (make-string-input-stream ,s)))
+      `(process-from-lisp '(,@input))))
 
 (defparameter *stack* nil
   "The Forth data stack")
@@ -20,12 +22,8 @@
   (description ""   :type string))
 
 (defparameter *forth-memory*
-  (make-array (* 10 1024) :fill-pointer 0 :adjustable t))
+  (make-array 64 :fill-pointer 0 :adjustable t :initial-element nil))
 
-;; execute modes are:
-;;    - immediate: fetch and immediately execute words.
-;;    - compile: fetch word, leave it in memory.
-(deftype forth-mode-t () '(member :immediate :compile))
 (declaim (type (forth-mode-t) *forth-mode*))
 (defparameter *forth-mode* :immediate)
 
@@ -43,6 +41,9 @@
 (define-condition not-a-forth-value (forth-error)
   ((value :initarg :value :reader not-a-forth-value-value))
   (:documentation "Entered value is not a Forth word nor a number"))
+
+(define-condition undefined-word (forth-error)
+  ((word :initarg :word :reader undefined-word-word)))
 
 ;;; Macros to help define the "code words" written in Lisp
 
@@ -79,7 +80,7 @@
   (let ((a (pop-stack))
         (b (pop-stack)))
     (if (and a b)
-        (push-stack (apply op (list a b)))
+        (push-stack (funcall op a b))
         (error 'stack-underflow))))
 
 (defun dup ()
@@ -104,7 +105,8 @@
     (put-numop2 "*" #'* ht)
     (put-numop2 "-" #'- ht)
     (put-numop2 "/" #'/ ht)
-    (put-word "." (format t "~A~%" *stack*) ht)
+    (put-word ".S" (format t "~A~%" *stack*) ht)
+    (put-word "." (format t "~A~%" (pop-stack)) ht)
     (put-word! "DROP" (pop-stack) "Drops 1 stack element." nil ht)
     (put-word! "DUP" (dup) "Duplicates a stack element." nil ht)
     (put-word! "SWAP" (swap) "Swaps top 2 stack elements." nil ht)
@@ -119,7 +121,7 @@
 ;;; INTERPRETER
 
 (defun push-memory (item)
-  (vector-push item *forth-memory*))
+  (vector-push-extend item *forth-memory*))
 
 (defun exec-word (&optional word)
   "Execute the given word if not nil, otherwise the one on the stack."
@@ -130,10 +132,9 @@
       (let ((n (ignore-errors (parse-integer n))))
         (or n (error 'not-a-forth-value :value n)))))
 
-(deftype interpreter-state-t ()
-  '(member :exec :name-compile :name-quote :wants-word :wants-num))
-(declaim (type (interpreter-state-t) *interpreter-state*))
-(defparameter *interpreter-state* :exec)
+(defun ensure-number (n)
+  (if (numberp n) n
+      (error 'not-a-number :word n)))
 
 (defparameter *compile-memory-start* 0)
 
@@ -152,56 +153,45 @@
                            (cond ((numberp w) (push-stack w))
                                  (t (exec-word w)))) *forth-dictionary*)))))
 
-(defun process (words)
+(declaim (ftype (function (input-stream-t)) interpret))
+(defun interpret (stream)
   "Forth interpreter."
   (flet ((do-immediate (fw w)
            (if fw (exec-word fw)
                (push-stack (coerce-to-number w))))
          (do-compile (fw w)
            (push-memory (or fw (coerce-to-number w)))))
-    (dolist (word words)
-      (cond
-        ;; first, we need to check the state for intermediate work by the tokenizer
-        ((eq *interpreter-state* :name-compile)
-         (push-memory (string word))
-         (setf *interpreter-state* :exec))
-        ((eq *interpreter-state* :name-quote)
-         (push-stack (gethash (string word) *forth-dictionary*))
-         (setf *interpreter-state* :exec))
-        ((eq *interpreter-state* :wants-word)
-         (push-stack (string word))
-         (setf *interpreter-state* :exec))
-        ((eq *interpreter-state* :wants-num)
-         (push-stack (if (numberp word) word
-                         (error 'not-a-number :word word)))
-         (setf *interpreter-state* :exec))
-        ;; now, check for "code" words
+    (loop with word = (read-word stream)
+          do (cond
+        ;; fundamental code words
         ((equal word "WORD")
-         (setf *interpreter-state* :wants-word))
+         (push-stack (read-word stream)))
+        ((equal word "KEY")
+         (push-stack (read-char stream)))
         ((equal word "NUMBER")
-         (setf *interpreter-state* :wants-num))
+         (push-stack (read-number stream)))
+        ((equal word "FIND")
+         (push-stack (gethash (pop-stack) *forth-dictionary*)))
+        ((equal word "HERE")
+         (aref *forth-memory* (fill-pointer *forth-memory*)))
+        ((equal word ",")
+         (push-memory (pop-stack)))
         ((equal word "EXECUTE")
          (exec-word))
-        ((equal word ":")
-         (setf *forth-mode* :compile)
-         (setf *interpreter-state* :name-compile)
-         (setf *compile-memory-start* (fill-pointer *forth-memory*)))
         ((equal word ";")
          (finish-compile))
-        ((equal word "'")
-         (setf *interpreter-state* :name-quote))
-        ;; finally, try to get words from the dictionary
+        ;; finally, try to use words from the dictionary
         (t (let ((fw (gethash word *forth-dictionary*)))
              (if (eq *forth-mode* :immediate)
                  (do-immediate fw word)
                  (do-compile fw word))))))))
 
 (defun process-from-lisp (&rest items)
-  "Converts items coming directly from LISP to the types expected by `process`."
+  "Converts items coming directly from LISP to the types expected by `interpret`."
   (dolist (item items)
     (cond ((listp item)
            (apply #'process-from-lisp item))
-          ((symbolp item) (process (list (symbol-name item))))
-          ((numberp item) (process (list item)))
-          ((stringp item) (process (list item)))
+          ((symbolp item) (interpret (list (symbol-name item))))
+          ((numberp item) (interpret (list item)))
+          ((stringp item) (interpret (list item)))
           (t (error 'not-a-forth-value :value item)))))
