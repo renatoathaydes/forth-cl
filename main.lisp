@@ -29,6 +29,21 @@
 (declaim (type (forth-mode-t) *forth-mode*))
 (defparameter *forth-mode* :immediate)
 
+;;; Error conditions
+
+(define-condition forth-error (error) ())
+
+(define-condition stack-underflow (forth-error) ()
+  (:documentation "Not enough elements on the stack to perform operation"))
+
+(define-condition not-a-number (forth-error)
+  ((word :initarg :word :reader not-a-number-word))
+  (:documentation "The element at the top of the stack was not a number"))
+
+(define-condition not-a-forth-value (forth-error)
+  ((value :initarg :value :reader not-a-forth-value-value))
+  (:documentation "Entered value is not a Forth word nor a number"))
+
 ;;; Macros to help define the "code words" written in Lisp
 
 (defmacro put-word (word fun ht)
@@ -113,10 +128,10 @@
 (defun coerce-to-number (n)
   (if (numberp n) n
       (let ((n (ignore-errors (parse-integer n))))
-        (or n (error :not-forth-value
-                     (format nil "not a Forth value: ~A~%" n))))))
+        (or n (error 'not-a-forth-value :value n)))))
 
-(deftype interpreter-state-t () '(member :exec :name-compile :name-quote))
+(deftype interpreter-state-t ()
+  '(member :exec :name-compile :name-quote :wants-word :wants-num))
 (declaim (type (interpreter-state-t) *interpreter-state*))
 (defparameter *interpreter-state* :exec)
 
@@ -153,7 +168,18 @@
         ((eq *interpreter-state* :name-quote)
          (push-stack (gethash (string word) *forth-dictionary*))
          (setf *interpreter-state* :exec))
+        ((eq *interpreter-state* :wants-word)
+         (push-stack (string word))
+         (setf *interpreter-state* :exec))
+        ((eq *interpreter-state* :wants-num)
+         (push-stack (if (numberp word) word
+                         (error 'not-a-number :word word)))
+         (setf *interpreter-state* :exec))
         ;; now, check for "code" words
+        ((equal word "WORD")
+         (setf *interpreter-state* :wants-word))
+        ((equal word "NUMBER")
+         (setf *interpreter-state* :wants-num))
         ((equal word "EXECUTE")
          (exec-word))
         ((equal word ":")
@@ -178,4 +204,4 @@
           ((symbolp item) (process (list (symbol-name item))))
           ((numberp item) (process (list item)))
           ((stringp item) (process (list item)))
-          (t (error :invalid-value (format nil "forth cannot handle value: ~A~%" item))))))
+          (t (error 'not-a-forth-value :value item)))))
