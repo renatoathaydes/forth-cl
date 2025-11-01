@@ -100,7 +100,7 @@
 ;;; Definition of the Forth Dictionary
 
 (defparameter *forth-dictionary*
-  (let ((ht (make-hash-table :test 'equal)))
+  (let ((ht (make-hash-table :test 'equalp)))
     (put-numop2 "+" #'+ ht)
     (put-numop2 "*" #'* ht)
     (put-numop2 "-" #'- ht)
@@ -153,38 +153,44 @@
                            (cond ((numberp w) (push-stack w))
                                  (t (exec-word w)))) *forth-dictionary*)))))
 
+(defun do-immediate (fw w)
+  (if fw (exec-word fw)
+      (push-stack (coerce-to-number w))))
+
+(defun do-compile (fw w)
+  (push-memory (or fw (coerce-to-number w))))
+
 (declaim (ftype (function (input-stream-t)) interpret))
 (defun interpret (stream)
   "Forth interpreter."
-  (flet ((do-immediate (fw w)
-           (if fw (exec-word fw)
-               (push-stack (coerce-to-number w))))
-         (do-compile (fw w)
-           (push-memory (or fw (coerce-to-number w)))))
-    (loop with word = (read-word stream)
-          do (cond
-        ;; fundamental code words
-        ((equal word "WORD")
-         (push-stack (read-word stream)))
-        ((equal word "KEY")
-         (push-stack (read-char stream)))
-        ((equal word "NUMBER")
-         (push-stack (read-number stream)))
-        ((equal word "FIND")
-         (push-stack (gethash (pop-stack) *forth-dictionary*)))
-        ((equal word "HERE")
-         (aref *forth-memory* (fill-pointer *forth-memory*)))
-        ((equal word ",")
-         (push-memory (pop-stack)))
-        ((equal word "EXECUTE")
-         (exec-word))
-        ((equal word ";")
-         (finish-compile))
-        ;; finally, try to use words from the dictionary
-        (t (let ((fw (gethash word *forth-dictionary*)))
-             (if (eq *forth-mode* :immediate)
-                 (do-immediate fw word)
-                 (do-compile fw word))))))))
+  (flet ((do-word (word)
+           (cond
+             ;; fundamental code words
+             ((equal word "WORD")
+              (push-stack (read-word stream)))
+             ((equal word "KEY")
+              (push-stack (read-char stream)))
+             ((equal word "NUMBER")
+              (push-stack (read-number stream)))
+             ((equal word "FIND")
+              (push-stack (gethash (pop-stack) *forth-dictionary*)))
+             ((equal word "HERE")
+              (aref *forth-memory* (fill-pointer *forth-memory*)))
+             ((equal word ",")
+              (push-memory (pop-stack)))
+             ((equal word "EXECUTE")
+              (exec-word))
+             ((equal word ";")
+              (finish-compile))
+             ;; finally, try to use words from the dictionary
+             (t (let ((fw (gethash word *forth-dictionary*)))
+                  (if (eq *forth-mode* :immediate)
+                      (do-immediate fw word)
+                      (do-compile fw word)))))))
+    (handler-case
+        (loop for word = (read-word stream) then (read-word stream)
+              do (do-word word))
+      (end-of-file () :ok))))
 
 (defun process-from-lisp (&rest items)
   "Converts items coming directly from LISP to the types expected by `interpret`."
