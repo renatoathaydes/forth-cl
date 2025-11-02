@@ -77,8 +77,8 @@
 
 (defun num-op-2 (op)
   "A number operation with 2 operands that come from the stack"
-  (let ((a (pop-stack))
-        (b (pop-stack)))
+  (let ((b (pop-stack))
+        (a (pop-stack)))
     (if (and a b)
         (push-stack (funcall op a b))
         (error 'stack-underflow))))
