@@ -17,7 +17,8 @@
 (defstruct forth-variable value)
 
 (defstruct forth-word
-  (function (lambda ()) :type function)
+  (function (lambda (st)
+    (declare (ignore st))) :type function)
   (immediate nil    :type boolean)
   (description ""   :type string))
 
@@ -47,18 +48,24 @@
 
 ;;; Macros to help define the "code words" written in Lisp
 
-(defmacro put-word (word fun ht)
-  `(setf (gethash ,word ,ht)
-         (make-forth-word :function (lambda () ,fun))))
+(defmacro lambda-with-at-most-one-arg (args body)
+  (let ((count (length args)))
+    (ecase count
+      (0 `(lambda (a) (declare (ignore a)) ,body))
+      (1 `(lambda ,args ,body)))))
 
-(defmacro put-word! (word fun desc immediate ht)
-  `(setf (gethash ,word ,ht)
-         (make-forth-word :function (lambda () ,fun)
+(defmacro put-word (word args body dictionary)
+  `(setf (gethash ,word ,dictionary)
+         (make-forth-word :function (lambda-with-at-most-one-arg ,args ,body))))
+
+(defmacro put-word! (word args body desc immediate dictionary)
+  `(setf (gethash ,word ,dictionary)
+         (make-forth-word :function (lambda-with-at-most-one-arg ,args ,body)
                           :description ,desc
                           :immediate ,immediate)))
 
 (defmacro put-numop2 (sym fun ht)
-  `(put-word ,sym (num-op-2 ,fun) ,ht))
+  `(put-word ,sym () (num-op-2 ,fun) ,ht))
 
 ;;; Stack fundamental operations.
 
@@ -105,11 +112,11 @@
     (put-numop2 "*" #'* ht)
     (put-numop2 "-" #'- ht)
     (put-numop2 "/" #'/ ht)
-    (put-word ".S" (format t "~A~%" *stack*) ht)
-    (put-word "." (format t "~A~%" (pop-stack)) ht)
-    (put-word! "DROP" (pop-stack) "Drops 1 stack element." nil ht)
-    (put-word! "DUP" (dup) "Duplicates a stack element." nil ht)
-    (put-word! "SWAP" (swap) "Swaps top 2 stack elements." nil ht)
+    (put-word ".S" () (format t "~A~%" *stack*) ht)
+    (put-word "." () (format t "~A~%" (pop-stack)) ht)
+    (put-word! "DROP" () (pop-stack) "Drops 1 stack element." nil ht)
+    (put-word! "DUP" () (dup) "Duplicates a stack element." nil ht)
+    (put-word! "SWAP" () (swap) "Swaps top 2 stack elements." nil ht)
     ht)
     "Forth dictionary.
    Keys are of string type. Values are of forth-word type.
@@ -123,9 +130,9 @@
 (defun push-memory (item)
   (vector-push-extend item *forth-memory*))
 
-(defun exec-word (&optional word)
+(defun exec-word (st &optional word)
   "Execute the given word if not nil, otherwise the one on the stack."
-  (apply (forth-word-function (or word (pop-stack))) nil))
+  (funcall (forth-word-function (or word (pop-stack))) st))
 
 (defun coerce-to-number (n)
   (if (numberp n) n
@@ -143,18 +150,8 @@
   (loop for word-index from start to end
         collect (aref *forth-memory* word-index)))
 
-(defun finish-compile ()
-  (let ((start *compile-memory-start*)
-        (end (fill-pointer *forth-memory*)))
-    (if (> (- end start) 0)
-        (let ((name (aref *forth-memory* start))
-              (words (collect-words (1+ start) end)))
-          (put-word name (dolist (w words)
-                           (cond ((numberp w) (push-stack w))
-                                 (t (exec-word w)))) *forth-dictionary*)))))
-
-(defun do-immediate (&key word text)
-  (if word (exec-word word)
+(defun do-immediate (stream &key word text)
+  (if word (exec-word stream word)
       (push-stack (coerce-to-number text))))
 
 (defun do-compile (&key word text)
@@ -179,13 +176,11 @@
              ((equalp word ",")
               (push-memory (pop-stack)))
              ((equalp word "EXECUTE")
-              (exec-word))
-             ((equalp word ";")
-              (finish-compile))
+              (exec-word stream))
              ;; finally, try to use words from the dictionary
              (t (let ((fw (gethash word *forth-dictionary*)))
                   (if (eq *forth-mode* :immediate)
-                      (do-immediate :word fw :text word)
+                      (do-immediate stream :word fw :text word)
                       (do-compile :word fw :text word)))))))
     ;; read words from the stream until end-of-file is reached
     (handler-case
