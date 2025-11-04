@@ -54,18 +54,15 @@
       (0 `(lambda (a) (declare (ignore a)) ,body))
       (1 `(lambda ,args ,body)))))
 
-(defmacro put-word (word args body dictionary)
-  `(setf (gethash ,word ,dictionary)
-         (make-forth-word :function (lambda-with-at-most-one-arg ,args ,body))))
-
-(defmacro put-word! (word args body desc immediate dictionary)
+(defmacro put-word (word args body desc immediate dictionary)
   `(setf (gethash ,word ,dictionary)
          (make-forth-word :function (lambda-with-at-most-one-arg ,args ,body)
                           :description ,desc
                           :immediate ,immediate)))
 
 (defmacro put-numop2 (sym fun ht)
-  `(put-word ,sym () (num-op-2 ,fun) ,ht))
+  `(put-word ,sym () (num-op-2 ,fun)
+             (format nil "( N N -- N ) The ~A operation" ,sym) nil ,ht))
 
 ;;; Stack fundamental operations.
 
@@ -104,6 +101,10 @@
         (progn (push-stack a) (push-stack b))
         (error 'stack-underflow))))
 
+(defun exec-word (st &optional word)
+  "Execute the given word if not nil, otherwise the one on the stack."
+  (funcall (forth-word-function (or word (pop-stack))) st))
+
 ;;; Definition of the Forth Dictionary
 
 (defparameter *forth-dictionary*
@@ -112,13 +113,28 @@
     (put-numop2 "*" #'* ht)
     (put-numop2 "-" #'- ht)
     (put-numop2 "/" #'/ ht)
-    (put-word ".S" () (format t "~A~%" *stack*) ht)
-    (put-word "." () (format t "~A~%" (pop-stack)) ht)
-    (put-word! "DROP" () (pop-stack) "Drops 1 stack element." nil ht)
-    (put-word! "DUP" () (dup) "Duplicates a stack element." nil ht)
-    (put-word! "SWAP" () (swap) "Swaps top 2 stack elements." nil ht)
+    (put-word "WORD" (st) (push-stack (read-word st))
+              "( -- S ) Reads a word from stdin." T ht)
+    (put-word "KEY" (st) (push-stack (read-char st))
+              "( -- C ) Reads a char from stdin." T ht)
+    (put-word "NUMBER" (st) (push-stack (read-number st))
+              "( -- N ) Reads a number from stdin." T ht)
+    (put-word "FIND" () (push-stack (gethash (pop-stack) *forth-dictionary*))
+              "( S -- FW ) Finds a WORD definition in the dictionary." T ht)
+    (put-word "EXECUTE" (st) (exec-word st)
+              "( i*x xt — j*x ) Executes a WORD." T ht)
+    (put-word ".S" () (format t "~A~%" *stack*)
+              "( -- ) Prints the whole stack." nil ht)
+    (put-word "." () (format t "~A~%" (pop-stack))
+              "( N -- ) Prints and drops the stack head." nil ht)
+    (put-word "DROP" () (pop-stack)
+              "Drops 1 stack element." nil ht)
+    (put-word "DUP" () (dup)
+              "Duplicates a stack element." nil ht)
+    (put-word "SWAP" () (swap)
+              "Swaps top 2 stack elements." nil ht)
     ht)
-    "Forth dictionary.
+  "Forth dictionary.
    Keys are of string type. Values are of forth-word type.
    The interpreter looks up a word in the dictionary and executes
    its function in :execute mode.
@@ -129,10 +145,6 @@
 
 (defun push-memory (item)
   (vector-push-extend item *forth-memory*))
-
-(defun exec-word (st &optional word)
-  "Execute the given word if not nil, otherwise the one on the stack."
-  (funcall (forth-word-function (or word (pop-stack))) st))
 
 (defun coerce-to-number (n)
   (if (numberp n) n
@@ -161,27 +173,10 @@
 (defun interpret (stream)
   "Forth interpreter."
   (flet ((do-word (word)
-           (cond
-             ;; fundamental code words
-             ((equalp word "WORD")
-              (push-stack (read-word stream)))
-             ((equalp word "KEY")
-              (push-stack (read-char stream)))
-             ((equalp word "NUMBER")
-              (push-stack (read-number stream)))
-             ((equalp word "FIND")
-              (push-stack (gethash (pop-stack) *forth-dictionary*)))
-             ((equalp word "HERE")
-              (aref *forth-memory* (fill-pointer *forth-memory*)))
-             ((equalp word ",")
-              (push-memory (pop-stack)))
-             ((equalp word "EXECUTE")
-              (exec-word stream))
-             ;; finally, try to use words from the dictionary
-             (t (let ((fw (gethash word *forth-dictionary*)))
-                  (if (eq *forth-mode* :immediate)
-                      (do-immediate stream :word fw :text word)
-                      (do-compile :word fw :text word)))))))
+           (let ((fw (gethash word *forth-dictionary*)))
+             (if (or (eq *forth-mode* :immediate) (forth-word-immediate fw))
+                 (do-immediate stream :word fw :text word)
+                 (do-compile :word fw :text word)))))
     ;; read words from the stream until end-of-file is reached
     (handler-case
         (loop for word = (read-word stream) then (read-word stream)
