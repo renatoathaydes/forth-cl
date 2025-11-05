@@ -4,10 +4,7 @@
   "The main Forth macro for writing Forth in Lisp.
    Pass a single string as argument, or Lisp symbols which will be
    converted to a string before being given to the interpreter."
-  (if (and (= (length input) 1) (stringp (first input)))
-      (let ((s (first input)))
-        `(interpret (make-string-input-stream ,s)))
-      `(process-from-lisp '(,@input))))
+  `(process-from-lisp ,@input))
 
 (defparameter *stack* nil
   "The Forth data stack")
@@ -185,10 +182,20 @@
 
 (defun process-from-lisp (&rest items)
   "Converts items coming directly from LISP to the types expected by `interpret`."
-  (dolist (item items)
-    (cond ((listp item)
-           (apply #'process-from-lisp item))
-          ((symbolp item) (interpret (list (symbol-name item))))
-          ((numberp item) (interpret (list item)))
-          ((stringp item) (interpret (list item)))
-          (t (error 'not-a-forth-value :value item)))))
+  (let ((out (make-string-output-stream)))
+    (labels ((to-strings
+                 (objects)
+               (loop for item in objects
+                     do (format out "~A " (to-string item))))
+             (to-string
+                 (item)
+               (typecase item
+                 (list (to-strings item))
+                 (symbol (symbol-name item))
+                 (number (princ-to-string item))
+                 (string item)
+                 (character (string item))
+                 (t (error 'not-a-forth-value :value item)))))
+      (to-strings items)
+      (interpret
+       (make-string-input-stream (get-output-stream-string out))))))
