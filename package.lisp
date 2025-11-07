@@ -1,5 +1,5 @@
 (defpackage :forth-cl
-  (:use :cl)
+  (:use :cl :defstar)
   (:export
    :forth
    :forth-word

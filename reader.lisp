@@ -1,7 +1,6 @@
 (in-package :forth-cl)
 
-(declaim (ftype (function (input-stream-t) string) read-word))
-(defun read-word (stream)
+(defun* (read-word -> string) ((stream input-stream-t))
   (let ((chars '()))
     ;; Skip leading whitespace
     (when (null (peek-char t stream nil nil))
@@ -12,7 +11,6 @@
           do (push (read-char stream) chars))
     (coerce (nreverse chars) 'string)))
 
-(declaim (ftype (function (input-stream-t) number) read-number))
-(defun read-number (stream)
+(defun* (read-number -> number) ((stream input-stream-t))
   (let ((word (read-word stream)))
     (coerce (read-from-string word) 'number)))

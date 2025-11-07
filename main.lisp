@@ -6,24 +6,14 @@
    converted to a string before being given to the interpreter."
   `(process-from-lisp ,@input))
 
-(defparameter *stack* nil
+(defparameter* (*stack* list) nil
   "The Forth data stack")
 
-;; A few Forth interpreter data structures
+;; A few Forth interpreter variables
 
-(defstruct forth-variable value)
+(defparameter* (*forth-mode* forth-mode-t) :immediate)
 
-(defstruct forth-word
-  (function (lambda (st)
-    (declare (ignore st))) :type function)
-  (immediate nil    :type boolean)
-  (description ""   :type string))
-
-(defparameter *forth-memory*
-  (make-array 64 :fill-pointer 0 :adjustable t :initial-element nil))
-
-(declaim (type (forth-mode-t) *forth-mode*))
-(defparameter *forth-mode* :immediate)
+(defparameter *current-word-data* nil)
 
 ;;; Error conditions
 
@@ -53,9 +43,10 @@
 
 (defmacro put-word (word args body desc immediate dictionary)
   `(setf (gethash ,word ,dictionary)
-         (make-forth-word :function (lambda-with-at-most-one-arg ,args ,body)
-                          :description ,desc
-                          :immediate ,immediate)))
+         (make-instance 'forth-word
+                        :fn (lambda-with-at-most-one-arg ,args ,body)
+                        :description ,desc
+                        :immediate ,immediate)))
 
 (defmacro put-numop2 (sym fun ht)
   `(put-word ,sym () (num-op-2 ,fun)
@@ -98,9 +89,9 @@
         (progn (push-stack a) (push-stack b))
         (error 'stack-underflow))))
 
-(defun exec-word (st &optional word)
+(defun* exec-word ((st input-stream-t) &optional (word ?forth-word))
   "Execute the given word if not nil, otherwise the one on the stack."
-  (funcall (forth-word-function (or word (pop-stack))) st))
+  (funcall (fn (or word (pop-stack))) st))
 
 ;;; Definition of the Forth Dictionary
 
@@ -141,39 +132,43 @@
 ;;; INTERPRETER
 
 (defun push-memory (item)
-  (vector-push-extend item *forth-memory*))
+  (push item *current-word-data*))
 
-(defun coerce-to-number (n)
+(defun* (coerce-to-number -> number) (n)
   (if (numberp n) n
       (let ((n (ignore-errors (parse-integer n))))
         (or n (error 'not-a-forth-value :value n)))))
 
-(defun ensure-number (n)
+(defun* (ensure-number -> number) (n)
   (if (numberp n) n
       (error 'not-a-number :word n)))
 
-(defparameter *compile-memory-start* 0)
-
-(defun collect-words (start end)
+(defun* collect-words ((start (integer 0)) (end (integer 0)))
   "Collect the word addresses that were left in memory"
   (loop for word-index from start to end
         collect (aref *forth-memory* word-index)))
 
-(defun do-immediate (stream &key word text)
+(defun* do-immediate ((stream input-stream-t )
+                      &key (word ?string) (text ?string))
+  "Execute immediately the forth-word WORD, or push the TEXT to the stack as a number.
+   Only one of WORD and TEXT should be non-null."
   (if word (exec-word stream word)
       (push-stack (coerce-to-number text))))
 
-(defun do-compile (&key word text)
+(defun* do-compile ((stream input-stream-t )
+                    &key (word ?string) (text ?string))
+  "Compile the forth-word WORD, or TEXT as a number.
+   Only one of WORD and TEXT should be non-null."
+  (declare (ignore stream))
   (push-memory (or word (coerce-to-number text))))
 
-(declaim (ftype (function (input-stream-t)) interpret))
-(defun interpret (stream)
+(defun* interpret ((stream input-stream-t))
   "Forth interpreter."
   (flet ((do-word (word)
            (let ((fw (gethash word *forth-dictionary*)))
-             (if (or (eq *forth-mode* :immediate) (forth-word-immediate fw))
+             (if (or (eq *forth-mode* :immediate) (immediate fw))
                  (do-immediate stream :word fw :text word)
-                 (do-compile :word fw :text word)))))
+                 (do-compile   stream :word fw :text word)))))
     ;; read words from the stream until end-of-file is reached
     (handler-case
         (loop for word = (read-word stream) then (read-word stream)

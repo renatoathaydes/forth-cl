@@ -3,6 +3,7 @@
   :version "0.1.0"
   :author "Renato Athaydes"
   :license "GPL"
+  :depends-on ("defstar")
   :components ((:file "package")
                (:file "types" :depends-on ("package"))
                (:file "reader" :depends-on ("package" "types"))
