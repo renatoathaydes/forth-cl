@@ -13,7 +13,17 @@
 
 (defparameter* (*forth-mode* forth-mode-t) :immediate)
 
-(defparameter *current-word-data* nil)
+(defparameter* (*current-word* ?forth-word) nil)
+
+(defparameter* (*forth-dictionary* forth-dictionary-t) '()
+    "Forth dictionary.
+   Keys are of string type. Values are of forth-word type.
+   The interpreter looks up a word in the dictionary and executes
+   its function in :execute mode.
+   In :compile mode, it just stores the function's address in the
+   word being compiled.")
+
+(defvar symbols-package (find-package :forth-symbols))
 
 ;;; Error conditions
 
@@ -33,7 +43,22 @@
 (define-condition undefined-word (forth-error)
   ((word :initarg :word :reader undefined-word-word)))
 
-;;; Macros to help define the "code words" written in Lisp
+(define-condition no-forth-word-defining (forth-error)
+  ())
+
+;;; Macros and functions to help define the "code words" written in Lisp
+
+(defun* (to-key -> word-key) ((word (or string symbol)))
+  "Ensure a WORD is stored correctly as a symbol in the symbols-package."
+  (let ((str-name
+          (etypecase word
+            (string word)
+            (symbol (symbol-name word)))))
+    (intern (string-upcase str-name) symbols-package)))
+
+(defun* (lookup-word -> ?forth-word) ((name (or string symbol)))
+  (let ((entry (assoc (to-key name) *forth-dictionary* :test 'eq)))
+    (and entry (cdr entry))))
 
 (defmacro lambda-with-at-most-one-arg (args body)
   (let ((count (length args)))
@@ -41,16 +66,18 @@
       (0 `(lambda (a) (declare (ignore a)) ,body))
       (1 `(lambda ,args ,body)))))
 
-(defmacro put-word (word args body desc immediate dictionary)
-  `(setf (gethash ,word ,dictionary)
-         (make-instance 'forth-word
-                        :fn (lambda-with-at-most-one-arg ,args ,body)
-                        :description ,desc
-                        :immediate ,immediate)))
+(defmacro put-word (word args body desc immediate)
+  `(push (cons (to-key ,word)
+               (make-instance
+                'forth-word
+                :fn (lambda-with-at-most-one-arg ,args ,body)
+                :description ,desc
+                :immediate ,immediate))
+         *forth-dictionary*))
 
-(defmacro put-numop2 (sym fun ht)
+(defmacro put-numop2 (sym fun)
   `(put-word ,sym () (num-op-2 ,fun)
-             (format nil "( N N -- N ) The ~A operation" ,sym) nil ,ht))
+             (format nil "( N N -- N ) The ~A operation" ,sym) nil))
 
 ;;; Stack fundamental operations.
 
@@ -93,46 +120,47 @@
   "Execute the given word if not nil, otherwise the one on the stack."
   (funcall (fn (or word (pop-stack))) st))
 
-;;; Definition of the Forth Dictionary
+(defun* (create-word -> forth-word) ((st input-stream-t))
+  (let ((name (read-word st)))
+    (put-word name () no-op-1 "" nil)))
 
-(defparameter *forth-dictionary*
-  (let ((ht (make-hash-table :test 'equalp)))
-    (put-numop2 "+" #'+ ht)
-    (put-numop2 "*" #'* ht)
-    (put-numop2 "-" #'- ht)
-    (put-numop2 "/" #'/ ht)
-    (put-word "WORD" (st) (push-stack (read-word st))
-              "( -- S ) Reads a word from stdin." T ht)
-    (put-word "KEY" (st) (push-stack (read-char st))
-              "( -- C ) Reads a char from stdin." T ht)
-    (put-word "NUMBER" (st) (push-stack (read-number st))
-              "( -- N ) Reads a number from stdin." T ht)
-    (put-word "FIND" () (push-stack (gethash (pop-stack) *forth-dictionary*))
-              "( S -- FW ) Finds a WORD definition in the dictionary." T ht)
-    (put-word "EXECUTE" (st) (exec-word st)
-              "( i*x xt — j*x ) Executes a WORD." T ht)
-    (put-word ".S" () (format t "~A~%" *stack*)
-              "( -- ) Prints the whole stack." nil ht)
-    (put-word "." () (format t "~A~%" (pop-stack))
-              "( N -- ) Prints and drops the stack head." nil ht)
-    (put-word "DROP" () (pop-stack)
-              "Drops 1 stack element." nil ht)
-    (put-word "DUP" () (dup)
-              "Duplicates a stack element." nil ht)
-    (put-word "SWAP" () (swap)
-              "Swaps top 2 stack elements." nil ht)
-    ht)
-  "Forth dictionary.
-   Keys are of string type. Values are of forth-word type.
-   The interpreter looks up a word in the dictionary and executes
-   its function in :execute mode.
-   In :compile mode, it just stores the function's address in the
-   word being compiled.")
+;;; Definition of the fundamental Forth WORDs
+
+(put-numop2 "+" #'+)
+(put-numop2 "*" #'*)
+(put-numop2 "-" #'-)
+(put-numop2 "/" #'/)
+(put-word "WORD" (st) (push-stack (read-word st))
+          "( -- S ) Reads a word from stdin." T)
+(put-word "KEY" (st) (push-stack (read-char st))
+          "( -- C ) Reads a char from stdin." T)
+(put-word "NUMBER" (st) (push-stack (read-number st))
+          "( -- N ) Reads a number from stdin." T)
+(put-word "FIND" () (push-stack (lookup-word (pop-stack)))
+          "( S -- FW ) Finds a WORD definition in the dictionary." T)
+(put-word "EXECUTE" (st) (exec-word st)
+          "( i*x xt — j*x ) Executes a WORD." T)
+(put-word ".S" () (format t "~A~%" *stack*)
+          "( -- ) Prints the whole stack." nil)
+(put-word "." () (format t "~A~%" (pop-stack))
+          "( N -- ) Prints and drops the stack head." nil)
+(put-word "DROP" () (pop-stack)
+          "Drops 1 stack element." nil)
+(put-word "DUP" () (dup)
+          "Duplicates a stack element." nil)
+(put-word "SWAP" () (swap)
+          "Swaps top 2 stack elements." nil)
+(put-word "IMMEDIATE" () (setf (mode *current-word*) :immediate)
+          "Sets the mode of the current WORD to immediate." nil)
+(put-word "CREATE" (st) (create-word st)
+          "( -- FW ) Creates a FORTH WORD. The name is read from stdin." T)
 
 ;;; INTERPRETER
 
 (defun push-memory (item)
-  (push item *current-word-data*))
+  (if (null *current-word*)
+      (error 'no-forth-word-defining)
+      (push item (get-data *current-word*))))
 
 (defun* (coerce-to-number -> number) (n)
   (if (numberp n) n
@@ -148,7 +176,7 @@
   (loop for word-index from start to end
         collect (aref *forth-memory* word-index)))
 
-(defun* do-immediate ((stream input-stream-t )
+(defun* do-immediate ((stream input-stream-t)
                       &key (word ?string) (text ?string))
   "Execute immediately the forth-word WORD, or push the TEXT to the stack as a number.
    Only one of WORD and TEXT should be non-null."
@@ -165,7 +193,7 @@
 (defun* interpret ((stream input-stream-t))
   "Forth interpreter."
   (flet ((do-word (word)
-           (let ((fw (gethash word *forth-dictionary*)))
+           (let ((fw (lookup-word word)))
              (if (or (eq *forth-mode* :immediate) (immediate fw))
                  (do-immediate stream :word fw :text word)
                  (do-compile   stream :word fw :text word)))))
