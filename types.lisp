@@ -60,7 +60,7 @@
    (data         :type array
                  :accessor get-data
                  :initarg :data
-                 :initform #()
+                 :initform (make-array 0 :adjustable T :fill-pointer T)
                  :documentation
                  "The data managed by this word. Equivalent to the 'parameter field'."))
   (:documentation
@@ -70,4 +70,4 @@
 
 (deftype ?forth-word () '(or null forth-word))
 
-(deftype ?string '(or null string))
+(deftype ?string () '(or null string))

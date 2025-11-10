@@ -11,9 +11,7 @@
 
 ;; A few Forth interpreter variables
 
-(defparameter* (*forth-mode* forth-mode-t) :immediate)
-
-(defparameter* (*current-word* ?forth-word) nil)
+(defparameter* (*state* forth-mode-t) :immediate)
 
 (defparameter* (*forth-dictionary* forth-dictionary-t) '()
     "Forth dictionary.
@@ -22,6 +20,10 @@
    its function in :execute mode.
    In :compile mode, it just stores the function's address in the
    word being compiled.")
+
+(defun* (current-word -> forth-word) ()
+  "Get the current-word, i.e. the word at the top of the dictionary."
+  (cdr (first *forth-dictionary*)))
 
 (defvar symbols-package (find-package :forth-symbols))
 
@@ -67,13 +69,16 @@
       (1 `(lambda ,args ,body)))))
 
 (defmacro put-word (word args body desc immediate)
-  `(push (cons (to-key ,word)
-               (make-instance
-                'forth-word
-                :fn (lambda-with-at-most-one-arg ,args ,body)
-                :description ,desc
-                :immediate ,immediate))
-         *forth-dictionary*))
+  (let ((key (gensym))
+        (fw (gensym)))
+    `(let ((,key (to-key ,word))
+           (,fw (make-instance
+                 'forth-word
+                 :fn (lambda-with-at-most-one-arg ,args ,body)
+                 :description ,desc
+                 :immediate ,immediate)))
+       (push (cons ,key ,fw) *forth-dictionary*)
+       ,fw)))
 
 (defmacro put-numop2 (sym fun)
   `(put-word ,sym () (num-op-2 ,fun)
@@ -150,17 +155,20 @@
           "Duplicates a stack element." nil)
 (put-word "SWAP" () (swap)
           "Swaps top 2 stack elements." nil)
-(put-word "IMMEDIATE" () (setf (mode *current-word*) :immediate)
+(put-word "IMMEDIATE" () (setf (mode (current-word)) :immediate)
           "Sets the mode of the current WORD to immediate." nil)
 (put-word "CREATE" (st) (create-word st)
           "( -- FW ) Creates a FORTH WORD. The name is read from stdin." T)
+(put-word "[" () (setf *state* :immediate)
+          "Enter interpreter mode." T)
+(put-word "]" () (setf *state* :compile)
+          "Enter compilation mode." T)
 
 ;;; INTERPRETER
 
 (defun push-memory (item)
-  (if (null *current-word*)
-      (error 'no-forth-word-defining)
-      (push item (get-data *current-word*))))
+  (let ((word (current-word)))
+    (vector-push-extend item (get-data word))))
 
 (defun* (coerce-to-number -> number) (n)
   (if (numberp n) n
@@ -177,14 +185,14 @@
         collect (aref *forth-memory* word-index)))
 
 (defun* do-immediate ((stream input-stream-t)
-                      &key (word ?string) (text ?string))
+                      &key ((word ?forth-word) nil) ((text ?string) nil))
   "Execute immediately the forth-word WORD, or push the TEXT to the stack as a number.
    Only one of WORD and TEXT should be non-null."
   (if word (exec-word stream word)
       (push-stack (coerce-to-number text))))
 
 (defun* do-compile ((stream input-stream-t )
-                    &key (word ?string) (text ?string))
+                    &key ((word ?forth-word) nil) ((text ?string) nil))
   "Compile the forth-word WORD, or TEXT as a number.
    Only one of WORD and TEXT should be non-null."
   (declare (ignore stream))
@@ -194,7 +202,7 @@
   "Forth interpreter."
   (flet ((do-word (word)
            (let ((fw (lookup-word word)))
-             (if (or (eq *forth-mode* :immediate) (immediate fw))
+             (if (or (eq *state* :immediate) (and fw (immediate fw)))
                  (do-immediate stream :word fw :text word)
                  (do-compile   stream :word fw :text word)))))
     ;; read words from the stream until end-of-file is reached
