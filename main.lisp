@@ -121,13 +121,13 @@
         (progn (push-stack a) (push-stack b))
         (error 'stack-underflow))))
 
-(defun* exec-word ((st input-stream-t) &optional (word ?forth-word))
+(defun* exec-word ((st input-stream-t) &optional ((word ?forth-word) nil))
   "Execute the given word if not nil, otherwise the one on the stack."
   (funcall (fn (or word (pop-stack))) st))
 
 (defun* (create-word -> forth-word) ((st input-stream-t))
   (let ((name (read-word st)))
-    (put-word name () no-op-1 "" nil)))
+    (put-word name () (no-op-1 st) "" nil)))
 
 ;;; Definition of the fundamental Forth WORDs
 
@@ -178,11 +178,6 @@
 (defun* (ensure-number -> number) (n)
   (if (numberp n) n
       (error 'not-a-number :word n)))
-
-(defun* collect-words ((start (integer 0)) (end (integer 0)))
-  "Collect the word addresses that were left in memory"
-  (loop for word-index from start to end
-        collect (aref *forth-memory* word-index)))
 
 (defun* do-immediate ((stream input-stream-t)
                       &key ((word ?forth-word) nil) ((text ?string) nil))

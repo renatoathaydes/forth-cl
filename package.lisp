@@ -13,3 +13,6 @@
 (defpackage :forth-symbols
   (:documentation
    "Package that stores all word names as they're stored in the dictionary."))
+
+#+development
+(declaim (optimize (debug 3) (safety 3) (speed 0)))
